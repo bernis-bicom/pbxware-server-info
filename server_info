@@ -1,0 +1,108 @@
+#!/bin/bash
+
+# server_info <ip>
+# Connects via SSH to port 2020 and runs diagnostics
+
+TARGET_IP=$1
+
+if [ -z "$TARGET_IP" ]; then
+    echo "Usage: server_info <ip_address>"
+    exit 1
+fi
+
+echo "Connecting to $TARGET_IP on port 2020..."
+
+ssh -p 2020 "$TARGET_IP" 'bash -s' << 'EOF'
+    echo "=========================================="
+    echo "REMOTE PBXWARE DIAGNOSTICS: $(hostname)"
+    # Portable local IP detection
+    LOCAL_IPS=$(ip addr show | grep -Po 'inet \K[\d.]+' | grep -v '127.0.0.1' | xargs)
+    echo "LOCAL IPs: $LOCAL_IPS"
+    echo "=========================================="
+
+    echo -e "\n--- 1. TELEPHONY STATUS ---"
+    if command -v asterisk > /dev/null; then
+        echo "PJSIP Endpoints Summary:"
+        asterisk -rx "pjsip show endpoints" | grep -E "Endpoint:|DeviceState:" || echo "No PJSIP endpoints."
+        
+        # Breakdown: Trunks vs Extensions
+        # In PBXware, trunks often contain 'Trunk' in the name
+        TRUNKS=$(asterisk -rx "pjsip show endpoints" | grep -i "Trunk")
+        TRUNK_COUNT=$(echo "$TRUNKS" | grep -c "Endpoint:")
+        
+        ONLINE_EXT=$(asterisk -rx "pjsip show endpoints" | grep -vEi "Trunk" | grep -c "Not in use")
+        OFFLINE_EXT=$(asterisk -rx "pjsip show endpoints" | grep -vEi "Trunk" | grep -c "Unavailable")
+        
+        echo "Telephony breakdown:"
+        echo " - Online Extensions: $ONLINE_EXT"
+        echo " - Offline Extensions: $OFFLINE_EXT"
+        echo " - Trunks detected: $TRUNK_COUNT"
+        
+        echo -e "\nPJSIP Registrations (Outbound):"
+        asterisk -rx "pjsip show registrations" | grep -E "ObjectsFound:|---" -A 15 || echo "No PJSIP registrations found."
+
+        echo -e "\nPJSIP AORs (Address of Record):"
+        # Removed aggressive grep to ensure we see the table
+        asterisk -rx "pjsip show aors" || echo "No AORs found."
+    else
+        echo "Asterisk not found on remote system."
+    fi
+
+    echo -e "\n--- 2. DISK USAGE (FOLDER SIZES) ---"
+    FOLDERS=(
+        "/opt/"
+        "/opt/httpd/"
+        "/opt/pbxware/"
+        "/opt/backup/"
+        "/opt/pbxware/pw/var/spool/asterisk/monitor/"
+        "/opt/pbxware/pw/var/spool/asterisk/voicemail/"
+        "/opt/pbxware/pw/var/lib/mysql/pbxware/"
+        "/opt/pbxware/pw/tmp/"
+    )
+    for f in "${FOLDERS[@]}"; do
+        if [ -d "$f" ]; then
+            # Use -x to stay on one filesystem and suppress errors for virtual files
+            du -shx "$f" 2>/dev/null
+        fi
+    done
+
+    echo -e "\n--- 3. TOP 10 LARGEST FILES IN /opt/pbxware ---"
+    # Added -prune to skip the virtual /proc directory which contains the 128TB kcore file
+    find /opt/pbxware -path "/opt/pbxware/pw/proc" -prune -o -type f -printf "%s %p\n" 2>/dev/null | sort -rn | head -n 10 | awk '{
+        split("B KB MB GB TB", unit);
+        v=$1; i=1;
+        while(v>=1024 && i<5){v/=1024; i++}
+        printf "%.1f %s\t%s\n", v, unit[i], $2
+    }'
+
+    echo -e "\n--- 4. /opt LISTING ---"
+    ls -F /opt/
+
+    echo -e "\n--- 5. CRONTAB ---"
+    crontab -l 2>/dev/null || echo "No crontab entries for root."
+
+    echo -e "\n--- 6. MEMORY (GB) ---"
+    free -g
+
+    echo -e "\n--- 7. DISK CAPACITY ---"
+    df -h
+
+    echo -e "\n--- 8. NETWORK / IFCONFIG ---"
+    if [ -x "$(command -v ifconfig)" ]; then ifconfig; else ip addr; fi
+
+    echo -e "\n--- 9. PUBLIC IP & NAT ---"
+    PUB_IP=$(curl -s ip.bernis.dev)
+    echo "Public IP: $PUB_IP"
+    echo "Local IPs: $LOCAL_IPS"
+    
+    IS_NAT="Yes (Behind NAT)"
+    for ip in $LOCAL_IPS; do
+        if [ "$ip" == "$PUB_IP" ]; then
+            IS_NAT="No (Direct Public IP)"
+            break
+        fi
+    done
+    echo "NAT Status: $IS_NAT"
+
+    echo -e "\n=========================================="
+EOF
