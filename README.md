@@ -1,4 +1,4 @@
-# pbxware-server-tools
+# pbxware-server-info
 
 A collection of lightweight shell scripts designed for diagnosing and monitoring **PBXware** servers. These tools help administrators quickly assess telephony status, disk health, and system performance either locally or remotely.
 
@@ -46,8 +46,8 @@ The core diagnostic script intended to be run directly on the PBXware host.
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/yourusername/pbxware-server-tools.git
-   cd pbxware-server-tools
+   git clone https://github.com/yourusername/pbxware-server-info.git
+   cd pbxware-server-info
    ```
 
 2. **Make scripts executable**:
